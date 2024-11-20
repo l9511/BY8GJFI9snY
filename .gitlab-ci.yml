@@ -1,0 +1,94 @@
+variables:
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+    POETRY_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pypoetry"
+    POETRY_VIRTUALENVS_IN_PROJECT: "true"
+
+cache:
+  key:
+    files:
+      - .gitlab-ci.yml
+      - poetry.lock
+    prefix: relate
+  paths:
+    - ".cache/pypoetry"
+    - ".cache/pip"
+    - ".venv"
+
+stages:
+  - setup
+  - lint
+  - tests
+  - docs
+
+.install-deps-template: &install-deps
+  image: inducer/ci-base-image
+  tags:
+    - docker-runner
+  before_script:
+    - curl -sSL https://install.python-poetry.org | python3 -
+    - export PATH="$HOME/.local/bin:$PATH"
+    - poetry install
+
+.quality-template: &quality
+  <<: *install-deps
+  stage: lint
+  except:
+    - tags
+
+.test-template: &test
+  <<: *install-deps
+  script:
+    - "bash ./.ci/run-tests-for-ci.sh"
+  stage: tests
+  except:
+    - tags
+  coverage: "/TOTAL.+ ([0-9]{1,3}%)/"
+
+setup:
+  <<: *install-deps
+  stage: setup
+  script: poetry config --list
+
+ruff:
+  <<: *quality
+  script: |
+    poetry run ruff check
+
+mypy:
+  <<: *quality
+  variables:
+    RELATE_LOCAL_TEST_SETTINGS: './local_settings_example.py'
+  script: poetry run ./.ci/run-mypy.sh
+
+safety:
+  <<: *quality
+  script: poetry run ./.ci/run-safety.sh
+
+Python 3:
+  <<: *test
+  needs: [setup]
+
+Python 3 Expensive:
+  <<: *test
+  variables:
+    RL_CI_TEST: expensive
+  needs: [setup]
+
+Python 3 CLI Tool:
+  <<: *test
+  script:
+    - git clone https://github.com/inducer/relate-sample
+    - cd relate-sample
+    - poetry run relate validate .
+    - poetry run relate test-code questions/autograded-python-example.yml
+    - poetry run relate expand-yaml flows/quiz-test.yml > /dev/null
+  needs: [setup]
+
+Documentation:
+  <<: *install-deps
+  stage: docs
+  variables:
+    RELATE_LOCAL_TEST_SETTINGS: './local_settings_example.py'
+  script:
+    - poetry run bash ./doc/build-docs.sh
+  needs: [setup]
